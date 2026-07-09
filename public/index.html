@@ -1,0 +1,1516 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UZEM Tarama Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* ===== DESIGN TOKENS ===== */
+        :root {
+            /* Primitive */
+            --black: #000000;
+            --neutral-950: #0c0c0c;
+            --neutral-900: #121212;
+            --neutral-850: #171717;
+            --neutral-800: #1e1e1e;
+            --neutral-750: #242424;
+            --neutral-700: #2a2a2a;
+            --neutral-600: #3f3f46;
+            --neutral-500: #5a5f68;
+            --neutral-400: #8a8f98;
+            --neutral-300: #b4b9c0;
+            --white: #ffffff;
+            --indigo: #5e6ad2;
+            --indigo-light: #8b9cf0;
+            --violet: #7c3aed;
+            --cyan: #06b6d4;
+            --green: #22c55e;
+            --amber: #f59e0b;
+            --red: #ef4444;
+
+            /* Semantic */
+            --bg: var(--neutral-950);
+            --surface: var(--neutral-900);
+            --surface-elevated: var(--neutral-850);
+            --surface-hover: var(--neutral-800);
+            --border: var(--neutral-700);
+            --border-strong: var(--neutral-600);
+            --text: var(--white);
+            --text-secondary: var(--neutral-400);
+            --text-tertiary: var(--neutral-500);
+            --primary: var(--indigo);
+            --primary-light: var(--indigo-light);
+            --primary-dim: rgba(94, 106, 210, 0.12);
+            --success: var(--green);
+            --warning: var(--amber);
+            --danger: var(--red);
+            --info: var(--cyan);
+
+            /* Spacing */
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 20px;
+            --space-6: 24px;
+            --space-8: 32px;
+            --space-10: 40px;
+
+            /* Radius */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --radius-full: 9999px;
+
+            /* Shadow */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+            --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
+            --shadow-glow: 0 0 24px rgba(94, 106, 210, 0.18);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: hidden;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-strong);
+        }
+
+        /* ===== LAYOUT ===== */
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            inset: 0 auto 0 0;
+            z-index: 50;
+        }
+
+        .sidebar-brand {
+            padding: var(--space-6);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+        }
+
+        .brand-mark {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(135deg, var(--primary), var(--violet));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .brand-mark svg {
+            width: 20px;
+            height: 20px;
+            color: white;
+        }
+
+        .brand-text {
+            font-weight: 700;
+            font-size: 1.05rem;
+            letter-spacing: -0.01em;
+        }
+
+        .brand-text span {
+            display: block;
+            font-size: 0.7rem;
+            font-weight: 500;
+            color: var(--text-tertiary);
+            margin-top: -2px;
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: var(--space-4);
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-2);
+        }
+
+        .nav-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-tertiary);
+            padding: var(--space-3) var(--space-4) var(--space-2);
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            padding: 10px var(--space-4);
+            border-radius: var(--radius-md);
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.15s ease;
+        }
+
+        .nav-link:hover {
+            background: var(--surface-hover);
+            color: var(--text);
+        }
+
+        .nav-link.active {
+            background: var(--primary-dim);
+            color: var(--primary-light);
+        }
+
+        .nav-link svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-footer {
+            padding: var(--space-4);
+            border-top: 1px solid var(--border);
+        }
+
+        .main {
+            flex: 1;
+            margin-left: 260px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            background: rgba(12, 12, 12, 0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border);
+            padding: var(--space-4) var(--space-8);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: var(--space-4);
+        }
+
+        .topbar-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: var(--space-4);
+        }
+
+        .content {
+            flex: 1;
+            padding: var(--space-8);
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-6);
+        }
+
+        /* ===== COMPONENTS ===== */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            padding: 6px 12px;
+            border-radius: var(--radius-full);
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: var(--surface-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-tertiary);
+            transition: all 0.3s;
+        }
+
+        .status-badge.running::before {
+            background: var(--success);
+            box-shadow: 0 0 10px var(--success);
+        }
+
+        .status-badge.paused::before {
+            background: var(--warning);
+            box-shadow: 0 0 10px var(--warning);
+        }
+
+        .status-badge.stopped::before {
+            background: var(--danger);
+        }
+
+        .controls {
+            display: flex;
+            gap: var(--space-2);
+        }
+
+        button {
+            padding: 9px 16px;
+            border: none;
+            border-radius: var(--radius-md);
+            font-weight: 600;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            color: var(--text);
+            background: var(--surface-elevated);
+            border: 1px solid var(--border);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        button:not(:disabled):hover {
+            transform: translateY(-1px);
+            border-color: var(--border-strong);
+        }
+
+        button:not(:disabled):active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            border-color: transparent;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #6b78d9;
+            box-shadow: 0 0 32px rgba(94, 106, 210, 0.28);
+        }
+
+        .btn-warning {
+            background: rgba(245, 158, 11, 0.12);
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.25);
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background: rgba(245, 158, 11, 0.2);
+        }
+
+        .btn-success {
+            background: rgba(34, 197, 94, 0.12);
+            color: var(--success);
+            border-color: rgba(34, 197, 94, 0.25);
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: rgba(34, 197, 94, 0.2);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        .btn-export {
+            width: 100%;
+            justify-content: center;
+            background: var(--surface-hover);
+        }
+
+        .btn-export:hover:not(:disabled) {
+            background: var(--neutral-750);
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ===== SECTIONS ===== */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-4);
+        }
+
+        .section-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+
+        /* ===== STATS ===== */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: var(--space-4);
+        }
+
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: var(--space-5);
+            transition: all 0.2s ease;
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-strong);
+            background: var(--surface-elevated);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-bottom: var(--space-3);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            line-height: 1;
+        }
+
+        .stat-sub {
+            font-size: 0.75rem;
+            color: var(--text-tertiary);
+            margin-top: var(--space-2);
+        }
+
+        /* ===== PROGRESS ===== */
+        .progress-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: var(--space-5);
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-3);
+        }
+
+        .progress-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .progress-value {
+            font-weight: 800;
+            font-size: 0.95rem;
+            color: var(--primary-light);
+        }
+
+        .progress-bar-bg {
+            background: var(--surface-hover);
+            border-radius: var(--radius-full);
+            height: 8px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            border-radius: var(--radius-full);
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            width: 0%;
+            box-shadow: var(--shadow-glow);
+        }
+
+        /* ===== TABLES ===== */
+        .tables-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: var(--space-5);
+        }
+
+        .data-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 420px;
+            transition: border-color 0.2s;
+        }
+
+        .data-card:hover {
+            border-color: var(--border-strong);
+        }
+
+        .data-card-header {
+            padding: var(--space-4) var(--space-5) var(--space-3);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-card-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            margin-bottom: var(--space-3);
+            color: var(--text);
+        }
+
+        .search-wrapper {
+            position: relative;
+        }
+
+        .search-wrapper svg {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 15px;
+            height: 15px;
+            color: var(--text-tertiary);
+            pointer-events: none;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 9px 12px 9px 36px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            background: var(--surface-hover);
+            color: var(--text);
+            font-size: 0.8rem;
+            outline: none;
+            transition: all 0.15s;
+        }
+
+        .search-box:focus {
+            border-color: var(--primary);
+            background: var(--neutral-850);
+        }
+
+        .search-box::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        .table-meta {
+            padding: var(--space-2) var(--space-5);
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-card-body {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+
+        thead th {
+            position: sticky;
+            top: 0;
+            padding: 12px var(--space-5);
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: var(--surface-elevated);
+            border-bottom: 1px solid var(--border);
+            z-index: 1;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            user-select: none;
+        }
+
+        thead th.sortable {
+            cursor: pointer;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        thead th.sortable:hover {
+            color: var(--text);
+            background: var(--neutral-750);
+        }
+
+        thead th.sortable .sort-indicator {
+            margin-left: var(--space-2);
+            color: var(--primary-light);
+            font-size: 0.65rem;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        thead th.sortable.active .sort-indicator {
+            opacity: 1;
+        }
+
+        thead th.sortable.active {
+            color: var(--primary-light);
+        }
+
+        tbody td {
+            padding: 11px var(--space-5);
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        tbody tr {
+            transition: background 0.12s;
+        }
+
+        tbody tr:hover td {
+            background: var(--surface-hover);
+        }
+
+        .clickable-row {
+            cursor: pointer;
+        }
+
+        .clickable-row:hover td {
+            background: rgba(94, 106, 210, 0.08) !important;
+        }
+
+        .rank-cell {
+            width: 40px;
+            color: var(--text-tertiary);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .count-cell {
+            text-align: right;
+            font-weight: 700;
+            color: var(--primary-light);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .tag {
+            display: inline-flex;
+            padding: 3px 8px;
+            border-radius: var(--radius-sm);
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        .tag-eng {
+            background: rgba(94, 106, 210, 0.12);
+            color: var(--primary-light);
+            border: 1px solid rgba(94, 106, 210, 0.2);
+        }
+
+        .tag-fen {
+            background: rgba(6, 182, 212, 0.12);
+            color: var(--info);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-tertiary);
+            padding: 48px var(--space-5);
+            font-size: 0.85rem;
+        }
+
+        /* ===== LOGS ===== */
+        .logs-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            height: 300px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .logs-header {
+            padding: var(--space-3) var(--space-5);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--surface-elevated);
+        }
+
+        .logs-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        .logs-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--success);
+            background: rgba(34, 197, 94, 0.1);
+            padding: 3px 8px;
+            border-radius: var(--radius-full);
+        }
+
+        .logs {
+            flex: 1;
+            overflow-y: auto;
+            padding: var(--space-3) var(--space-5);
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 0.78rem;
+            line-height: 1.7;
+        }
+
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            color: var(--text-secondary);
+            display: flex;
+            gap: var(--space-3);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            color: var(--primary-light);
+            font-weight: 600;
+            white-space: nowrap;
+            opacity: 0.9;
+        }
+
+        .log-message {
+            word-break: break-word;
+        }
+
+        /* ===== MODAL ===== */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(12px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            padding: var(--space-6);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal {
+            background: var(--surface);
+            border-radius: var(--radius-xl);
+            width: 100%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            transform: translateY(16px) scale(0.98);
+            transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .modal-overlay.active .modal {
+            transform: translateY(0) scale(1);
+        }
+
+        .modal-header {
+            padding: var(--space-5) var(--space-6);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--surface-elevated);
+        }
+
+        .modal-title {
+            font-size: 1.1rem;
+            font-weight: 800;
+            letter-spacing: -0.01em;
+        }
+
+        .modal-close {
+            background: var(--surface-hover);
+            color: var(--text-secondary);
+            font-size: 1.35rem;
+            padding: 5px 10px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+        }
+
+        .modal-close:hover {
+            background: var(--neutral-750);
+            color: var(--text);
+        }
+
+        .modal-body {
+            padding: var(--space-6);
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-bottom: var(--space-4);
+            font-weight: 500;
+        }
+
+        .faculty-group {
+            margin-bottom: var(--space-6);
+        }
+
+        .faculty-group-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin-bottom: var(--space-3);
+            padding-bottom: var(--space-3);
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 1280px) {
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.2s ease;
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main {
+                margin-left: 0;
+            }
+
+            .tables-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .topbar {
+                padding: var(--space-4);
+            }
+
+            .content {
+                padding: var(--space-4);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .topbar-actions {
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+
+            .controls {
+                flex-wrap: wrap;
+            }
+
+            button {
+                padding: 8px 12px;
+                font-size: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-mark">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    UZEM Tarama
+                    <span>Dashboard v2</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-label">Menü</div>
+                <a href="#" class="nav-link active">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>
+                    Dashboard
+                </a>
+                <a href="#courses" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
+                    Dersler
+                </a>
+                <a href="#instructors" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /></svg>
+                    Hocalar
+                </a>
+                <a href="#students" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" /></svg>
+                    Öğrenciler
+                </a>
+                <a href="#logs" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" /></svg>
+                    Loglar
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button id="btnExport" class="btn-export" onclick="exportSql()">💾 SQL İndir</button>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <div class="topbar-title">Dashboard</div>
+                <div class="topbar-actions">
+                    <span id="statusBadge" class="status-badge stopped">Bekliyor</span>
+                    <div class="controls">
+                        <button id="btnStart" class="btn-primary" onclick="start()">
+                            <span class="spinner" id="startSpinner" style="display:none;"></span>
+                            <span>🚀 Başlat</span>
+                        </button>
+                        <button id="btnPause" class="btn-warning" onclick="pause()" disabled>⏸️ Duraklat</button>
+                        <button id="btnResume" class="btn-success" onclick="resume()" disabled>▶️ Devam Et</button>
+                        <button id="btnStop" class="btn-danger" onclick="stop()" disabled>🛑 Durdur</button>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content">
+                <section class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Toplam İstek</div>
+                        <div class="stat-value" id="requestCount">0</div>
+                        <div class="stat-sub">Gönderilen fetch isteği</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Geçerli Öğrenci</div>
+                        <div class="stat-value" id="validCount" style="color: var(--success);">0</div>
+                        <div class="stat-sub">Bulunan öğrenci kaydı</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Bekleyen</div>
+                        <div class="stat-value" id="pendingCount" style="color: var(--info);">0</div>
+                        <div class="stat-sub">Şu anda işlenen</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Kalan</div>
+                        <div class="stat-value" id="remainingCount">0</div>
+                        <div class="stat-sub">Taranmayan numara</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Hata Sayısı</div>
+                        <div class="stat-value" id="errorCount" style="color: var(--danger);">0</div>
+                        <div class="stat-sub">Başarısız istekler</div>
+                    </div>
+                </section>
+
+                <section class="progress-card">
+                    <div class="progress-info">
+                        <span class="progress-label">Tarama İlerlemesi</span>
+                        <span class="progress-value" id="progressText">0%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progressBar"></div>
+                    </div>
+                </section>
+
+                <section class="tables-grid" id="courses">
+                    <div class="data-card">
+                        <div class="data-card-header">
+                            <div class="data-card-title">🏫 Mühendislik Fakültesi — En Çok Alınan Dersler</div>
+                            <div class="search-wrapper">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <input type="text" class="search-box" id="engSearch" placeholder="Ders ara..." oninput="filterTables()">
+                            </div>
+                        </div>
+                        <div class="table-meta" id="engMeta">0 ders</div>
+                        <div class="data-card-body">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="rank-cell">#</th>
+                                        <th class="sortable" data-table="eng" data-col="name" onclick="sortTable('eng','name')">Ders <span class="sort-indicator">↓</span></th>
+                                        <th class="sortable count-cell" data-table="eng" data-col="count" onclick="sortTable('eng','count')">Öğrenci <span class="sort-indicator">↓</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="engCoursesTable">
+                                    <tr><td colspan="3" class="empty-state">Henüz veri yok</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="data-card">
+                        <div class="data-card-header">
+                            <div class="data-card-title">🔬 Fen / UZEM — En Çok Alınan Dersler</div>
+                            <div class="search-wrapper">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <input type="text" class="search-box" id="fenSearch" placeholder="Ders ara..." oninput="filterTables()">
+                            </div>
+                        </div>
+                        <div class="table-meta" id="fenMeta">0 ders</div>
+                        <div class="data-card-body">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="rank-cell">#</th>
+                                        <th class="sortable" data-table="fen" data-col="name" onclick="sortTable('fen','name')">Ders <span class="sort-indicator">↓</span></th>
+                                        <th class="sortable count-cell" data-table="fen" data-col="count" onclick="sortTable('fen','count')">Öğrenci <span class="sort-indicator">↓</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="fenCoursesTable">
+                                    <tr><td colspan="3" class="empty-state">Henüz veri yok</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="data-card" id="instructors">
+                        <div class="data-card-header">
+                            <div class="data-card-title">👨‍🏫 En Çok Ders Veren Hocalar</div>
+                            <div class="search-wrapper">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <input type="text" class="search-box" id="instructorSearch" placeholder="Hoca ara..." oninput="filterTables()">
+                            </div>
+                        </div>
+                        <div class="table-meta" id="instructorMeta">0 hoca</div>
+                        <div class="data-card-body">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="sortable" data-table="instructors" data-col="name" onclick="sortTable('instructors','name')">Hoca <span class="sort-indicator">↓</span></th>
+                                        <th class="sortable count-cell" data-table="instructors" data-col="count" onclick="sortTable('instructors','count')">Ders Sayısı <span class="sort-indicator">↓</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="instructorsTable">
+                                    <tr><td colspan="2" class="empty-state">Henüz veri yok</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="data-card" id="students">
+                        <div class="data-card-header">
+                            <div class="data-card-title">👨‍🎓 Tüm Öğrenciler</div>
+                            <div class="search-wrapper">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <input type="text" class="search-box" id="studentSearch" placeholder="Öğrenci no veya isim ara..." oninput="filterTables()">
+                            </div>
+                        </div>
+                        <div class="table-meta" id="studentMeta">0 öğrenci</div>
+                        <div class="data-card-body">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="sortable" data-table="students" data-col="ogrno" onclick="sortTable('students','ogrno')">Öğrenci No <span class="sort-indicator">↓</span></th>
+                                        <th class="sortable" data-table="students" data-col="name" onclick="sortTable('students','name')">İsim <span class="sort-indicator">↓</span></th>
+                                        <th class="sortable" data-table="students" data-col="faculties" onclick="sortTable('students','faculties')">Fakülteler <span class="sort-indicator">↓</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="studentsTable">
+                                    <tr><td colspan="3" class="empty-state">Henüz veri yok</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="logs-card" id="logs">
+                    <div class="logs-header">
+                        <div class="logs-title">📝 Canlı Log</div>
+                        <div class="logs-badge">● canlı</div>
+                    </div>
+                    <div class="logs" id="logsContent">
+                        <div class="log-entry">
+                            <span class="log-time">--:--:--</span>
+                            <span class="log-message">Dashboard hazır. Başlatmak için butona tıklayın.</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <div class="modal-overlay" id="detailModal" onclick="closeModal(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">Detay</div>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        const els = {
+            statusBadge: document.getElementById('statusBadge'),
+            requestCount: document.getElementById('requestCount'),
+            validCount: document.getElementById('validCount'),
+            errorCount: document.getElementById('errorCount'),
+            pendingCount: document.getElementById('pendingCount'),
+            remainingCount: document.getElementById('remainingCount'),
+            progressBar: document.getElementById('progressBar'),
+            progressText: document.getElementById('progressText'),
+            engCoursesTable: document.getElementById('engCoursesTable'),
+            fenCoursesTable: document.getElementById('fenCoursesTable'),
+            instructorsTable: document.getElementById('instructorsTable'),
+            studentsTable: document.getElementById('studentsTable'),
+            engSearch: document.getElementById('engSearch'),
+            fenSearch: document.getElementById('fenSearch'),
+            instructorSearch: document.getElementById('instructorSearch'),
+            studentSearch: document.getElementById('studentSearch'),
+            engMeta: document.getElementById('engMeta'),
+            fenMeta: document.getElementById('fenMeta'),
+            instructorMeta: document.getElementById('instructorMeta'),
+            studentMeta: document.getElementById('studentMeta'),
+            logs: document.getElementById('logsContent'),
+            btnStart: document.getElementById('btnStart'),
+            btnPause: document.getElementById('btnPause'),
+            btnResume: document.getElementById('btnResume'),
+            btnStop: document.getElementById('btnStop'),
+            btnExport: document.getElementById('btnExport'),
+        };
+
+        let state = {};
+        let allStudents = [];
+        let currentEngCourses = [];
+        let currentFenCourses = [];
+        let currentInstructors = [];
+
+        const sortState = {
+            eng: { column: 'count', direction: 'desc' },
+            fen: { column: 'count', direction: 'desc' },
+            instructors: { column: 'count', direction: 'desc' },
+            students: { column: 'default', direction: 'desc' }
+        };
+
+        function setStatus(text, type) {
+            els.statusBadge.textContent = text;
+            els.statusBadge.className = `status-badge ${type}`;
+        }
+
+        function updateButtons() {
+            const { isRunning, isPaused } = state;
+            els.btnStart.disabled = isRunning;
+            els.btnPause.disabled = !isRunning || isPaused;
+            els.btnResume.disabled = !isRunning || !isPaused;
+            els.btnStop.disabled = !isRunning;
+        }
+
+        function updateStats(data) {
+            state = data;
+            els.requestCount.textContent = data.requestCount.toLocaleString();
+            els.validCount.textContent = data.validStudentsCount.toLocaleString();
+            els.errorCount.textContent = data.errorCount.toLocaleString();
+            els.pendingCount.textContent = data.pending.toLocaleString();
+            els.remainingCount.textContent = data.remaining.toLocaleString();
+
+            const total = data.requestCount + data.remaining + data.pending;
+            const pct = total > 0 ? Math.round((data.requestCount / total) * 100) : 0;
+            els.progressBar.style.width = `${pct}%`;
+            els.progressText.textContent = `${pct}%`;
+
+            if (data.isRunning && !data.isPaused) setStatus('Çalışıyor', 'running');
+            else if (data.isRunning && data.isPaused) setStatus('Duraklatıldı', 'paused');
+            else setStatus('Bekliyor', 'stopped');
+
+            updateButtons();
+            renderTables(data);
+        }
+
+        function renderTables(data) {
+            currentEngCourses = data.engStats?.courses || [];
+            currentFenCourses = data.fenStats?.courses || [];
+            currentInstructors = buildInstructors(data.engStats?.instructors || [], data.fenStats?.instructors || []);
+            filterTables();
+        }
+
+        function filterTables() {
+            const engQuery = els.engSearch.value.trim().toLowerCase();
+            const fenQuery = els.fenSearch.value.trim().toLowerCase();
+            const instQuery = els.instructorSearch.value.trim().toLowerCase();
+            const studentQuery = els.studentSearch.value.trim().toLowerCase();
+
+            let filteredEng = currentEngCourses.filter(([course]) => course.toLowerCase().includes(engQuery));
+            let filteredFen = currentFenCourses.filter(([course]) => course.toLowerCase().includes(fenQuery));
+            let filteredInst = currentInstructors.filter(([name]) => name.toLowerCase().includes(instQuery));
+            let filteredStudents = allStudents.filter(s =>
+                s.ogrno.toLowerCase().includes(studentQuery) ||
+                (s.name && s.name.toLowerCase().includes(studentQuery))
+            );
+
+            filteredEng = sortData(filteredEng, sortState.eng);
+            filteredFen = sortData(filteredFen, sortState.fen);
+            filteredInst = sortData(filteredInst, sortState.instructors);
+            filteredStudents = sortStudentData(filteredStudents, sortState.students);
+
+            renderCourseTable(els.engCoursesTable, filteredEng, 'MUHENDISLIK', els.engMeta, 'ders');
+            renderCourseTable(els.fenCoursesTable, filteredFen, 'FEN_UZEM', els.fenMeta, 'ders');
+            renderInstructorsTable(filteredInst, els.instructorsTable, els.instructorMeta);
+            renderStudentsTable(filteredStudents, els.studentsTable, els.studentMeta);
+        }
+
+        function sortData(items, { column, direction }) {
+            const sorted = [...items];
+            const asc = direction === 'asc';
+            switch (column) {
+                case 'count':
+                    sorted.sort((a, b) => asc ? a[1] - b[1] : b[1] - a[1]);
+                    break;
+                case 'name':
+                    sorted.sort((a, b) => asc ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]));
+                    break;
+            }
+            return sorted;
+        }
+
+        function sortStudentData(students, { column, direction }) {
+            const sorted = [...students];
+            const asc = direction === 'asc';
+            switch (column) {
+                case 'ogrno':
+                    sorted.sort((a, b) => asc ? a.ogrno.localeCompare(b.ogrno) : b.ogrno.localeCompare(a.ogrno));
+                    break;
+                case 'name':
+                    sorted.sort((a, b) => asc ? (a.name || '').localeCompare(b.name || '') : (b.name || '').localeCompare(a.name || ''));
+                    break;
+                case 'faculties':
+                    sorted.sort((a, b) => {
+                        const fa = (a.faculties || []).length;
+                        const fb = (b.faculties || []).length;
+                        if (fa !== fb) return asc ? fa - fb : fb - fa;
+                        return a.ogrno.localeCompare(b.ogrno);
+                    });
+                    break;
+            }
+            return sorted;
+        }
+
+        function sortTable(table, column) {
+            const current = sortState[table];
+            if (current.column === column) {
+                current.direction = current.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                current.column = column;
+                current.direction = (column === 'name' || column === 'ogrno') ? 'asc' : 'desc';
+            }
+            updateSortIndicators();
+            filterTables();
+        }
+
+        function updateSortIndicators() {
+            document.querySelectorAll('th.sortable').forEach(th => {
+                const table = th.dataset.table;
+                const col = th.dataset.col;
+                const indicator = th.querySelector('.sort-indicator');
+                const active = sortState[table]?.column === col;
+                th.classList.toggle('active', active);
+                if (active && indicator) {
+                    indicator.textContent = sortState[table].direction === 'asc' ? '↑' : '↓';
+                }
+            });
+        }
+
+        function renderCourseTable(tbody, courses, faculty, metaEl, metaLabel) {
+            metaEl.textContent = `${courses.length} ${metaLabel}`;
+            if (!courses.length) {
+                const query = faculty === 'MUHENDISLIK' ? els.engSearch.value.trim() : els.fenSearch.value.trim();
+                tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${query ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = courses.map(([course, count], i) =>
+                `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(course)}', '${faculty}')">
+                    <td class="rank-cell">${i + 1}</td>
+                    <td>${escapeHtml(course)}</td>
+                    <td class="count-cell">${count}</td>
+                </tr>`
+            ).join('');
+        }
+
+        function renderInstructorsTable(instructors, tbody, metaEl) {
+            metaEl.textContent = `${instructors.length} hoca`;
+            if (!instructors.length) {
+                tbody.innerHTML = `<tr><td colspan="2" class="empty-state">${els.instructorSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = instructors.map(([name, count]) =>
+                `<tr class="clickable-row" onclick="showInstructorCourses('${escapeHtml(name)}')">
+                    <td>${escapeHtml(name)}</td>
+                    <td class="count-cell">${count}</td>
+                </tr>`
+            ).join('');
+        }
+
+        function renderStudentsTable(students, tbody, metaEl) {
+            metaEl.textContent = `${students.length} öğrenci`;
+            if (!students.length) {
+                tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${els.studentSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = students.map(s =>
+                `<tr class="clickable-row" onclick="showStudentDetails('${s.ogrno}')">
+                    <td>${s.ogrno}</td>
+                    <td>${escapeHtml(s.name)}</td>
+                    <td>${formatFaculties(s.faculties)}</td>
+                </tr>`
+            ).join('');
+        }
+
+        function buildInstructors(eng, fen) {
+            const combined = new Map();
+            [...eng, ...fen].forEach(([name, count]) => {
+                combined.set(name, (combined.get(name) || 0) + count);
+            });
+            return Array.from(combined.entries()).sort((a, b) => b[1] - a[1]);
+        }
+
+        function formatFaculties(faculties) {
+            if (!faculties || !faculties.length) return '-';
+            const labels = faculties.map(f => {
+                if (f === 'MUHENDISLIK') return '<span class="tag tag-eng">MÜH</span>';
+                if (f === 'FEN_UZEM') return '<span class="tag tag-fen">FEN</span>';
+                return f;
+            });
+            return labels.join(' ');
+        }
+
+        function addStudent(student) {
+            allStudents.unshift(student);
+            filterTables();
+        }
+
+        function setAllStudents(students) {
+            allStudents = students;
+            filterTables();
+        }
+
+        function addLog(entry) {
+            const time = new Date(entry.time).toLocaleTimeString('tr-TR');
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.innerHTML = `<span class="log-time">${time}</span><span class="log-message">${escapeHtml(entry.message)}</span>`;
+            els.logs.appendChild(div);
+            els.logs.scrollTop = els.logs.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function openModal(title, bodyHtml) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalBody').innerHTML = bodyHtml;
+            document.getElementById('detailModal').classList.add('active');
+        }
+
+        function closeModal(event) {
+            if (event && event.target !== document.getElementById('detailModal')) return;
+            document.getElementById('detailModal').classList.remove('active');
+        }
+
+        function showCourseStudents(courseKey, faculty) {
+            socket.emit('queryStudentsByCourse', { courseKey, faculty }, (data) => {
+                const list = data.students.length
+                    ? `<table><thead><tr><th>Öğrenci No</th><th>İsim</th><th>Yıl</th><th>Grup</th><th>Fakülteler</th></tr></thead><tbody>` +
+                      data.students.map(s =>
+                          `<tr class="clickable-row" onclick="showStudentDetails('${s.ogrno}')">
+                              <td>${s.ogrno}</td>
+                              <td>${escapeHtml(s.name)}</td>
+                              <td>${s.year}</td>
+                              <td>${s.group}</td>
+                              <td>${formatFaculties(s.faculties)}</td>
+                          </tr>`
+                      ).join('') +
+                      `</tbody></table>`
+                    : '<p class="empty-state">Bu dersi alan öğrenci bulunamadı.</p>';
+                openModal(`📚 ${escapeHtml(courseKey)}`, `<div class="modal-subtitle">Bu dersi alan ${data.students.length} öğrenci</div>${list}`);
+            });
+        }
+
+        function showInstructorCourses(instructor) {
+            socket.emit('queryCoursesByInstructor', { instructor }, (data) => {
+                const list = data.courses.length
+                    ? `<table><thead><tr><th>Ders</th><th>Kod</th></tr></thead><tbody>` +
+                      data.courses.map(c =>
+                          `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(c.courseKey)}', 'all')"><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td></tr>`
+                      ).join('') +
+                      `</tbody></table>`
+                    : '<p class="empty-state">Verdiği ders bulunamadı.</p>';
+                openModal(`👨‍🏫 ${escapeHtml(instructor)}`, `<div class="modal-subtitle">Verdiği dersler (${data.courses.length})</div>${list}`);
+            });
+        }
+
+        function showStudentDetails(ogrno) {
+            socket.emit('queryStudentDetails', { ogrno }, (data) => {
+                if (!data.student) {
+                    openModal('Öğrenci Detayı', '<p class="empty-state">Öğrenci bulunamadı.</p>');
+                    return;
+                }
+                const s = data.student;
+                const facultyLabels = (s.faculties || []).map(f => f === 'MUHENDISLIK' ? 'MÜHENDİSLİK' : (f === 'FEN_UZEM' ? 'FEN/UZEM' : f)).join(' + ');
+                let html = `<div class="modal-subtitle">${s.ogrno} - ${escapeHtml(s.name)} | ${facultyLabels || 'Bilinmiyor'}</div>`;
+
+                const engCourses = s.coursesByFaculty.MUHENDISLIK;
+                const fenCourses = s.coursesByFaculty.FEN_UZEM;
+
+                if (engCourses.length) {
+                    html += `<div class="faculty-group"><div class="faculty-group-title">🏫 Mühendislik Fakültesi</div>`;
+                    html += renderCourseList(engCourses) + `</div>`;
+                }
+
+                if (fenCourses.length) {
+                    html += `<div class="faculty-group"><div class="faculty-group-title">🔬 Fen/UZEM</div>`;
+                    html += renderCourseList(fenCourses) + `</div>`;
+                }
+
+                if (!engCourses.length && !fenCourses.length) {
+                    html += '<p class="empty-state">Kayıtlı ders bulunamadı.</p>';
+                }
+
+                openModal(`👨‍🎓 ${escapeHtml(s.name)}`, html);
+            });
+        }
+
+        function renderCourseList(courses) {
+            return `<table><thead><tr><th>Ders</th><th>Kod</th><th>Hoca</th></tr></thead><tbody>` +
+                courses.map(c =>
+                    `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(c.courseKey)}', 'all')"><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td><td>${escapeHtml(c.instructor)}</td></tr>`
+                ).join('') +
+                `</tbody></table>`;
+        }
+
+        function start() { socket.emit('start'); }
+        function pause() { socket.emit('pause'); }
+        function resume() { socket.emit('resume'); }
+        function stop() { socket.emit('stop'); }
+        function exportSql() { window.location.href = '/api/export/sql'; }
+
+        socket.on('connect', () => addLog({ time: new Date().toISOString(), message: '✅ Dashboard bağlantısı kuruldu.' }));
+        socket.on('stats', updateStats);
+        socket.on('studentFound', addStudent);
+        socket.on('studentsSnapshot', setAllStudents);
+        socket.on('log', addLog);
+        socket.on('requestSent', (data) => {});
+        socket.on('responseReceived', (data) => {});
+        socket.on('completed', () => {
+            setStatus('Tamamlandı', 'stopped');
+            updateButtons();
+        });
+
+        updateSortIndicators();
+    </script>
+</body>
+</html>
