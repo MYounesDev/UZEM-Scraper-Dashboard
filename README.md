@@ -1,4 +1,4 @@
-# UZEM Tarama Dashboard
+# UZEM Scraper Dashboard
 
 Real-time dashboard that scrapes [Kocaeli University UZEM Edestek](http://edestek.kocaeli.edu.tr/index.php) student data and visualizes course/instructor statistics, with SQLite export.
 
