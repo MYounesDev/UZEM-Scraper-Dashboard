@@ -3,8 +3,20 @@
 
 const TARGET_URL = 'http://edestek.kocaeli.edu.tr/index.php';
 
+// Vercel does NOT auto-parse req.body — we must do it manually
+function readBody(req) {
+    return new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', chunk => { data += chunk; });
+        req.on('end', () => {
+            try { resolve(JSON.parse(data)); }
+            catch { resolve({}); }
+        });
+        req.on('error', reject);
+    });
+}
+
 module.exports = async function handler(req, res) {
-    // Allow CORS from any origin (our own frontend calls this)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,7 +29,9 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-    const { ogrno } = req.body || {};
+    const body = await readBody(req);
+    const { ogrno } = body;
+
     if (!ogrno || typeof ogrno !== 'string' || !/^\d{8,10}$/.test(ogrno)) {
         return res.status(400).json({ error: 'Geçersiz ogrno' });
     }
@@ -31,7 +45,6 @@ module.exports = async function handler(req, res) {
                 'cache-control': 'no-cache',
             },
             body: `ogrno=${encodeURIComponent(ogrno)}`,
-            // 8 second timeout to stay safely within Vercel's 10s hobby limit
             signal: AbortSignal.timeout(8000),
         });
 
@@ -40,7 +53,6 @@ module.exports = async function handler(req, res) {
         }
 
         const html = await upstream.text();
-        // Return raw HTML - client does all parsing with native DOMParser
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         return res.status(200).send(html);
     } catch (err) {
