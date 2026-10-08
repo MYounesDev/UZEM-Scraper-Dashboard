@@ -5,6 +5,8 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const initSqlJs = require('sql.js');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 const app = express();
 const httpServer = createServer(app);
@@ -109,9 +111,9 @@ function resetState() {
 
 function buildOgrnos() {
     const list = [];
-    for (let y = 18; y <= 25; y++) {
-        for (let g = 1; g <= 2; g++) {
-            if (y >= 26 && g === 2) break;
+    for (let y = 18; y <= 26; y++) { // 18 girişli 26 girişlilere kadar
+        for (let g = 1; g <= 2; g++) { // 1. ve 2. ogtm
+            if (y >= 26 && g === 2) break; // 
             for (let n = 1; n <= 180; n++) {
                 list.push(`${y}020${g}${String(n).padStart(3, '0')}`);
             }
@@ -562,12 +564,152 @@ app.get('/api/export/db', async (req, res) => {
     res.send(buffer);
 });
 
+// ==================== SQLITE IMPORT ====================
+app.post('/api/import/db', upload.single('dbfile'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Dosya bulunamadı.' });
+    }
+
+    try {
+        const SQL = await initSqlJs();
+        const db = new SQL.Database(req.file.buffer);
+
+        // Validate it has the expected schema
+        const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
+        if (!tables.length) throw new Error('Geçersiz veritabanı: tablo bulunamadı.');
+        const tableNames = tables[0].values.map(r => r[0]);
+        const required = ['students', 'courses', 'faculties', 'instructors', 'student_faculties', 'student_courses'];
+        for (const t of required) {
+            if (!tableNames.includes(t)) throw new Error(`Eksik tablo: ${t}`);
+        }
+
+        // Load all data from the DB
+        const facultyRows = db.exec('SELECT id, code, name FROM faculties')[0];
+        const facultyMap = new Map(); // id -> code
+        if (facultyRows) {
+            facultyRows.values.forEach(([id, code]) => facultyMap.set(id, code));
+        }
+
+        const instructorRows = db.exec('SELECT id, name FROM instructors')[0];
+        const instructorMap = new Map(); // id -> name
+        if (instructorRows) {
+            instructorRows.values.forEach(([id, name]) => instructorMap.set(id, name));
+        }
+
+        const courseRows = db.exec('SELECT id, course_key, name, code, faculty_id, instructor_id FROM courses')[0];
+        const courseMap = new Map(); // id -> course object
+        if (courseRows) {
+            courseRows.values.forEach(([id, courseKey, name, code, facultyId, instructorId]) => {
+                courseMap.set(id, {
+                    id,
+                    courseKey,
+                    name,
+                    code,
+                    faculty: facultyMap.get(facultyId) || 'UNKNOWN',
+                    instructor: instructorMap.get(instructorId) || 'Bilinmiyor',
+                });
+            });
+        }
+
+        const studentRows = db.exec('SELECT id, ogrno, name, year, group_id FROM students')[0];
+        const studentDbMap = new Map(); // id -> { ogrno, name, year, group }
+        if (studentRows) {
+            studentRows.values.forEach(([id, ogrno, name, year, group_id]) => {
+                studentDbMap.set(id, { id, ogrno, name, year, group: group_id });
+            });
+        }
+
+        const sfRows = db.exec('SELECT student_id, faculty_id FROM student_faculties')[0];
+        const studentFacultiesMap = new Map(); // studentId -> Set(facultyCode)
+        if (sfRows) {
+            sfRows.values.forEach(([studentId, facultyId]) => {
+                if (!studentFacultiesMap.has(studentId)) studentFacultiesMap.set(studentId, new Set());
+                studentFacultiesMap.get(studentId).add(facultyMap.get(facultyId) || 'UNKNOWN');
+            });
+        }
+
+        const scRows = db.exec('SELECT student_id, course_id FROM student_courses')[0];
+        const studentCoursesMap = new Map(); // studentId -> [courseId]
+        if (scRows) {
+            scRows.values.forEach(([studentId, courseId]) => {
+                if (!studentCoursesMap.has(studentId)) studentCoursesMap.set(studentId, []);
+                studentCoursesMap.get(studentId).push(courseId);
+            });
+        }
+
+        db.close();
+
+        // Rebuild in-memory state
+        resetState();
+
+        studentDbMap.forEach((sBase, studentId) => {
+            const faculties = Array.from(studentFacultiesMap.get(studentId) || new Set());
+            const courseIds = studentCoursesMap.get(studentId) || [];
+            const courses = courseIds.map(cid => courseMap.get(cid)).filter(Boolean);
+
+            if (!faculties.length || !courses.length) return;
+
+            const student = {
+                ogrno: sBase.ogrno,
+                name: sBase.name,
+                year: sBase.year,
+                group: sBase.group,
+                faculties,
+                courses,
+            };
+
+            validStudents.push(student);
+            studentIndex.set(student.ogrno, student);
+            successCount++;
+
+            courses.forEach(c => {
+                const stats = c.faculty === 'MUHENDISLIK' ? engStats : fenStats;
+                stats.courses.set(c.courseKey, (stats.courses.get(c.courseKey) || 0) + 1);
+
+                if (!stats.byYear.has(student.year)) stats.byYear.set(student.year, new Map());
+                const yearMap = stats.byYear.get(student.year);
+                yearMap.set(c.courseKey, (yearMap.get(c.courseKey) || 0) + 1);
+
+                stats.instructors.set(c.instructor, (stats.instructors.get(c.instructor) || 0) + 1);
+                if (!stats.instructorCourseKeys.has(c.instructor)) {
+                    stats.instructorCourseKeys.set(c.instructor, new Set());
+                }
+                stats.instructorCourseKeys.get(c.instructor).add(c.courseKey);
+
+                if (!courseStudents.has(c.courseKey)) courseStudents.set(c.courseKey, []);
+                courseStudents.get(c.courseKey).push({
+                    ogrno: student.ogrno,
+                    name: student.name,
+                    faculty: c.faculty,
+                    year: student.year,
+                });
+
+                if (!instructorCourses.has(c.instructor)) instructorCourses.set(c.instructor, []);
+                // avoid duplicates in instructorCourses
+                const already = instructorCourses.get(c.instructor).some(x => x.courseKey === c.courseKey && x.faculty === c.faculty);
+                if (!already) instructorCourses.get(c.instructor).push(c);
+            });
+        });
+
+        log(`📂 Veritabanı içe aktarıldı: ${validStudents.length} öğrenci yüklendi.`);
+
+        // Broadcast the new state to all connected clients
+        io.emit('studentsSnapshot', validStudents);
+        emitStats();
+
+        res.json({ ok: true, studentCount: validStudents.length });
+    } catch (err) {
+        console.error('Import error:', err);
+        res.status(400).json({ error: err.message });
+    }
+});
+
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ==================== START SERVER ====================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3003;
 httpServer.listen(PORT, () => {
     console.log(`🌐 Dashboard running at http://localhost:${PORT}`);
 });

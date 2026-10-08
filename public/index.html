@@ -383,6 +383,32 @@
             background: var(--neutral-750);
         }
 
+        .btn-import {
+            width: 100%;
+            justify-content: center;
+            background: rgba(94, 106, 210, 0.08);
+            border-color: rgba(94, 106, 210, 0.2);
+            color: var(--primary-light);
+            margin-top: var(--space-2);
+        }
+
+        .btn-import:hover:not(:disabled) {
+            background: rgba(94, 106, 210, 0.15);
+            border-color: rgba(94, 106, 210, 0.35);
+        }
+
+        .import-status {
+            font-size: 0.72rem;
+            color: var(--text-tertiary);
+            text-align: center;
+            margin-top: var(--space-2);
+            min-height: 18px;
+            transition: color 0.2s;
+        }
+
+        .import-status.success { color: var(--success); }
+        .import-status.error   { color: var(--danger); }
+
         .spinner {
             width: 14px;
             height: 14px;
@@ -953,7 +979,10 @@
             </nav>
 
             <div class="sidebar-footer">
-                <button id="btnExport" class="btn-export" onclick="exportSql()">💾 SQL İndir</button>
+                <button id="btnExport" class="btn-export" onclick="exportSql()">💾 DB İndir</button>
+                <button id="btnImport" class="btn-import" onclick="triggerImport()">📂 DB Yükle</button>
+                <input type="file" id="importFileInput" accept=".db" style="display:none" onchange="importDb(this)">
+                <div class="import-status" id="importStatus"></div>
             </div>
         </aside>
 
@@ -1496,7 +1525,46 @@
         function pause() { socket.emit('pause'); }
         function resume() { socket.emit('resume'); }
         function stop() { socket.emit('stop'); }
-        function exportSql() { window.location.href = '/api/export/sql'; }
+        function exportSql() { window.location.href = '/api/export/db'; }
+
+        function triggerImport() {
+            document.getElementById('importFileInput').value = '';
+            document.getElementById('importFileInput').click();
+        }
+
+        async function importDb(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const statusEl = document.getElementById('importStatus');
+            const btnImport = document.getElementById('btnImport');
+
+            statusEl.textContent = 'Yükleniyor...';
+            statusEl.className = 'import-status';
+            btnImport.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('dbfile', file);
+
+                const res = await fetch('/api/import/db', { method: 'POST', body: formData });
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Bilinmeyen hata');
+
+                statusEl.textContent = `✓ ${data.studentCount} öğrenci yüklendi`;
+                statusEl.className = 'import-status success';
+            } catch (err) {
+                statusEl.textContent = `Hata: ${err.message}`;
+                statusEl.className = 'import-status error';
+            } finally {
+                btnImport.disabled = false;
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                    statusEl.className = 'import-status';
+                }, 5000);
+            }
+        }
 
         socket.on('connect', () => addLog({ time: new Date().toISOString(), message: '✅ Dashboard bağlantısı kuruldu.' }));
         socket.on('stats', updateStats);
