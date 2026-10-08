@@ -32,3 +32,9 @@ build/
 
 # Test
 coverage/
+
+# SQLite exports (large binary files, not needed on Vercel)
+*.db
+
+# Vercel
+.vercel

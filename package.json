@@ -1,23 +1,17 @@
 {
   "name": "uzem-tarama-dashboard",
-  "version": "1.0.0",
-  "description": "Real-time dashboard that scrapes Kocaeli University UZEM Edestek student data and exports it to SQLite",
+  "version": "3.0.0",
+  "description": "Client-side UZEM Edestek student scraper dashboard - Vercel compatible",
   "main": "dashboard.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node dashboard.js",
+    "dev": "node dashboard.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "express": "^5.2.1",
-    "jsdom": "^29.1.1",
-    "multer": "^2.4.0",
-    "socket.io": "^4.8.3",
-    "sql.js": "^1.14.1"
-  },
-  "devDependencies": {
-    "socket.io-client": "^4.8.3"
+    "express": "^5.2.1"
   }
 }

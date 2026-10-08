@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UZEM Tarama Dashboard</title>
-    <script src="/socket.io/socket.io.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         /* ===== DESIGN TOKENS ===== */
@@ -395,6 +394,20 @@
         .btn-import:hover:not(:disabled) {
             background: rgba(94, 106, 210, 0.15);
             border-color: rgba(94, 106, 210, 0.35);
+        }
+
+        .btn-clear {
+            width: 100%;
+            justify-content: center;
+            background: rgba(239, 68, 68, 0.06);
+            border-color: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+            margin-top: var(--space-2);
+            font-size: 0.75rem;
+        }
+
+        .btn-clear:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.12);
         }
 
         .import-status {
@@ -950,7 +963,7 @@
                 </div>
                 <div class="brand-text">
                     UZEM Tarama
-                    <span>Dashboard v2</span>
+                    <span>Dashboard v3</span>
                 </div>
             </div>
 
@@ -979,9 +992,10 @@
             </nav>
 
             <div class="sidebar-footer">
-                <button id="btnExport" class="btn-export" onclick="exportSql()">💾 DB İndir</button>
-                <button id="btnImport" class="btn-import" onclick="triggerImport()">📂 DB Yükle</button>
-                <input type="file" id="importFileInput" accept=".db" style="display:none" onchange="importDb(this)">
+                <button id="btnExport" class="btn-export" onclick="exportJson()">💾 JSON İndir</button>
+                <button id="btnImport" class="btn-import" onclick="triggerImport()">📂 JSON Yükle</button>
+                <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importJson(this)">
+                <button class="btn-clear" onclick="clearData()">🗑️ Veriyi Temizle</button>
                 <div class="import-status" id="importStatus"></div>
             </div>
         </aside>
@@ -1180,405 +1194,860 @@
     </div>
 
     <script>
-        const socket = io();
+    // ==================== CONFIG ====================
+    const PROXY_URL = '/api/proxy';
+    const CONCURRENCY = 80;   // High concurrency — browser handles parallelism naturally
+    const DELAY_MS = 0;       // No artificial delay; upstream rate limiting handles it
+    const MAX_RETRIES = 2;
+    const LS_KEY = 'uzem_students_v2'; // v2 = normalized format
 
-        const els = {
-            statusBadge: document.getElementById('statusBadge'),
-            requestCount: document.getElementById('requestCount'),
-            validCount: document.getElementById('validCount'),
-            errorCount: document.getElementById('errorCount'),
-            pendingCount: document.getElementById('pendingCount'),
-            remainingCount: document.getElementById('remainingCount'),
-            progressBar: document.getElementById('progressBar'),
-            progressText: document.getElementById('progressText'),
-            engCoursesTable: document.getElementById('engCoursesTable'),
-            fenCoursesTable: document.getElementById('fenCoursesTable'),
-            instructorsTable: document.getElementById('instructorsTable'),
-            studentsTable: document.getElementById('studentsTable'),
-            engSearch: document.getElementById('engSearch'),
-            fenSearch: document.getElementById('fenSearch'),
-            instructorSearch: document.getElementById('instructorSearch'),
-            studentSearch: document.getElementById('studentSearch'),
-            engMeta: document.getElementById('engMeta'),
-            fenMeta: document.getElementById('fenMeta'),
-            instructorMeta: document.getElementById('instructorMeta'),
-            studentMeta: document.getElementById('studentMeta'),
-            logs: document.getElementById('logsContent'),
-            btnStart: document.getElementById('btnStart'),
-            btnPause: document.getElementById('btnPause'),
-            btnResume: document.getElementById('btnResume'),
-            btnStop: document.getElementById('btnStop'),
-            btnExport: document.getElementById('btnExport'),
-        };
+    // ==================== STATE ====================
+    let isRunning = false;
+    let isPaused = false;
+    let shouldStop = false;
+    let pending = 0;
+    let finished = false;
+    let requestCount = 0;
+    let successCount = 0;
+    let errorCount = 0;
 
-        let state = {};
-        let allStudents = [];
-        let currentEngCourses = [];
-        let currentFenCourses = [];
-        let currentInstructors = [];
+    // ---- Normalized data model ----
+    // courseLookup: code -> { name, code, instructor, faculty }
+    // validStudents: [{ ogrno, name, year, group, faculties:[], courses:[code, ...] }]
+    // (courses array holds only codes — details resolved via courseLookup)
+    let courseLookup = {};   // key = code (unique per code+faculty combo: "MATH101|MUHENDISLIK")
+    let validStudents = [];
+    let ogrnos = [];
 
-        const sortState = {
-            eng: { column: 'count', direction: 'desc' },
-            fen: { column: 'count', direction: 'desc' },
-            instructors: { column: 'count', direction: 'desc' },
-            students: { column: 'default', direction: 'desc' }
-        };
+    // Fast lookup: ogrno -> student index in validStudents
+    const studentMap = new Map();
 
-        function setStatus(text, type) {
-            els.statusBadge.textContent = text;
-            els.statusBadge.className = `status-badge ${type}`;
-        }
+    const engStats = {
+        courses: new Map(),
+        instructors: new Map(),
+        instructorCourseKeys: new Map(),
+    };
+    const fenStats = {
+        courses: new Map(),
+        instructors: new Map(),
+        instructorCourseKeys: new Map(),
+    };
 
-        function updateButtons() {
-            const { isRunning, isPaused } = state;
-            els.btnStart.disabled = isRunning;
-            els.btnPause.disabled = !isRunning || isPaused;
-            els.btnResume.disabled = !isRunning || !isPaused;
-            els.btnStop.disabled = !isRunning;
-        }
+    // UI display state
+    let allStudents = [];
+    let currentEngCourses = [];
+    let currentFenCourses = [];
+    let currentInstructors = [];
 
-        function updateStats(data) {
-            state = data;
-            els.requestCount.textContent = data.requestCount.toLocaleString();
-            els.validCount.textContent = data.validStudentsCount.toLocaleString();
-            els.errorCount.textContent = data.errorCount.toLocaleString();
-            els.pendingCount.textContent = data.pending.toLocaleString();
-            els.remainingCount.textContent = data.remaining.toLocaleString();
+    const sortState = {
+        eng:         { column: 'count', direction: 'desc' },
+        fen:         { column: 'count', direction: 'desc' },
+        instructors: { column: 'count', direction: 'desc' },
+        students:    { column: 'default', direction: 'desc' },
+    };
 
-            const total = data.requestCount + data.remaining + data.pending;
-            const pct = total > 0 ? Math.round((data.requestCount / total) * 100) : 0;
-            els.progressBar.style.width = `${pct}%`;
-            els.progressText.textContent = `${pct}%`;
+    // ==================== DOM REFS ====================
+    const els = {
+        statusBadge:      document.getElementById('statusBadge'),
+        requestCount:     document.getElementById('requestCount'),
+        validCount:       document.getElementById('validCount'),
+        errorCount:       document.getElementById('errorCount'),
+        pendingCount:     document.getElementById('pendingCount'),
+        remainingCount:   document.getElementById('remainingCount'),
+        progressBar:      document.getElementById('progressBar'),
+        progressText:     document.getElementById('progressText'),
+        engCoursesTable:  document.getElementById('engCoursesTable'),
+        fenCoursesTable:  document.getElementById('fenCoursesTable'),
+        instructorsTable: document.getElementById('instructorsTable'),
+        studentsTable:    document.getElementById('studentsTable'),
+        engSearch:        document.getElementById('engSearch'),
+        fenSearch:        document.getElementById('fenSearch'),
+        instructorSearch: document.getElementById('instructorSearch'),
+        studentSearch:    document.getElementById('studentSearch'),
+        engMeta:          document.getElementById('engMeta'),
+        fenMeta:          document.getElementById('fenMeta'),
+        instructorMeta:   document.getElementById('instructorMeta'),
+        studentMeta:      document.getElementById('studentMeta'),
+        logs:             document.getElementById('logsContent'),
+        btnStart:         document.getElementById('btnStart'),
+        btnPause:         document.getElementById('btnPause'),
+        btnResume:        document.getElementById('btnResume'),
+        btnStop:          document.getElementById('btnStop'),
+    };
 
-            if (data.isRunning && !data.isPaused) setStatus('Çalışıyor', 'running');
-            else if (data.isRunning && data.isPaused) setStatus('Duraklatıldı', 'paused');
-            else setStatus('Bekliyor', 'stopped');
+    // ==================== LOGGING ====================
+    function addLog(message) {
+        const time = new Date().toLocaleTimeString('tr-TR');
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = `<span class="log-time">${time}</span><span class="log-message">${escapeHtml(message)}</span>`;
+        els.logs.appendChild(div);
+        els.logs.scrollTop = els.logs.scrollHeight;
+        // Keep log bounded
+        while (els.logs.children.length > 500) els.logs.removeChild(els.logs.firstChild);
+    }
 
-            updateButtons();
-            renderTables(data);
-        }
-
-        function renderTables(data) {
-            currentEngCourses = data.engStats?.courses || [];
-            currentFenCourses = data.fenStats?.courses || [];
-            currentInstructors = buildInstructors(data.engStats?.instructors || [], data.fenStats?.instructors || []);
-            filterTables();
-        }
-
-        function filterTables() {
-            const engQuery = els.engSearch.value.trim().toLowerCase();
-            const fenQuery = els.fenSearch.value.trim().toLowerCase();
-            const instQuery = els.instructorSearch.value.trim().toLowerCase();
-            const studentQuery = els.studentSearch.value.trim().toLowerCase();
-
-            let filteredEng = currentEngCourses.filter(([course]) => course.toLowerCase().includes(engQuery));
-            let filteredFen = currentFenCourses.filter(([course]) => course.toLowerCase().includes(fenQuery));
-            let filteredInst = currentInstructors.filter(([name]) => name.toLowerCase().includes(instQuery));
-            let filteredStudents = allStudents.filter(s =>
-                s.ogrno.toLowerCase().includes(studentQuery) ||
-                (s.name && s.name.toLowerCase().includes(studentQuery))
-            );
-
-            filteredEng = sortData(filteredEng, sortState.eng);
-            filteredFen = sortData(filteredFen, sortState.fen);
-            filteredInst = sortData(filteredInst, sortState.instructors);
-            filteredStudents = sortStudentData(filteredStudents, sortState.students);
-
-            renderCourseTable(els.engCoursesTable, filteredEng, 'MUHENDISLIK', els.engMeta, 'ders');
-            renderCourseTable(els.fenCoursesTable, filteredFen, 'FEN_UZEM', els.fenMeta, 'ders');
-            renderInstructorsTable(filteredInst, els.instructorsTable, els.instructorMeta);
-            renderStudentsTable(filteredStudents, els.studentsTable, els.studentMeta);
-        }
-
-        function sortData(items, { column, direction }) {
-            const sorted = [...items];
-            const asc = direction === 'asc';
-            switch (column) {
-                case 'count':
-                    sorted.sort((a, b) => asc ? a[1] - b[1] : b[1] - a[1]);
-                    break;
-                case 'name':
-                    sorted.sort((a, b) => asc ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]));
-                    break;
-            }
-            return sorted;
-        }
-
-        function sortStudentData(students, { column, direction }) {
-            const sorted = [...students];
-            const asc = direction === 'asc';
-            switch (column) {
-                case 'ogrno':
-                    sorted.sort((a, b) => asc ? a.ogrno.localeCompare(b.ogrno) : b.ogrno.localeCompare(a.ogrno));
-                    break;
-                case 'name':
-                    sorted.sort((a, b) => asc ? (a.name || '').localeCompare(b.name || '') : (b.name || '').localeCompare(a.name || ''));
-                    break;
-                case 'faculties':
-                    sorted.sort((a, b) => {
-                        const fa = (a.faculties || []).length;
-                        const fb = (b.faculties || []).length;
-                        if (fa !== fb) return asc ? fa - fb : fb - fa;
-                        return a.ogrno.localeCompare(b.ogrno);
-                    });
-                    break;
-            }
-            return sorted;
-        }
-
-        function sortTable(table, column) {
-            const current = sortState[table];
-            if (current.column === column) {
-                current.direction = current.direction === 'asc' ? 'desc' : 'asc';
-            } else {
-                current.column = column;
-                current.direction = (column === 'name' || column === 'ogrno') ? 'asc' : 'desc';
-            }
-            updateSortIndicators();
-            filterTables();
-        }
-
-        function updateSortIndicators() {
-            document.querySelectorAll('th.sortable').forEach(th => {
-                const table = th.dataset.table;
-                const col = th.dataset.col;
-                const indicator = th.querySelector('.sort-indicator');
-                const active = sortState[table]?.column === col;
-                th.classList.toggle('active', active);
-                if (active && indicator) {
-                    indicator.textContent = sortState[table].direction === 'asc' ? '↑' : '↓';
+    // ==================== STUDENT NUMBER GENERATION ====================
+    function buildOgrnos() {
+        const list = [];
+        for (let y = 18; y <= 26; y++) {
+            for (let g = 1; g <= 2; g++) {
+                if (y >= 26 && g === 2) break;
+                for (let n = 1; n <= 180; n++) {
+                    list.push(`${y}020${g}${String(n).padStart(3, '0')}`);
                 }
+            }
+        }
+        return list;
+    }
+
+    // ==================== HTML PARSER (native browser DOMParser) ====================
+    function parseResponse(ogrno, html) {
+        if (html.includes('Böyle bir kullanıcı Uzem Edestek sistemlerinde mevcut değil')) {
+            return null;
+        }
+
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        const studentNameEl = doc.querySelector('a[title*="Sisteme giriş yapmak"]');
+        if (!studentNameEl) return null;
+
+        const fullText = studentNameEl.textContent.trim();
+        const parts = fullText.split(' - ').map(s => s.trim());
+        if (parts.length < 2) return null;
+        const [, studentName] = parts;
+
+        const year = parseInt(ogrno.substring(0, 2));
+        const group = parseInt(ogrno.substring(5, 6));
+
+        const blocks = doc.querySelectorAll('.w3-center');
+        const studentFaculties = new Set();
+        const studentCourseCodes = [];  // flat list of lookup keys
+
+        for (const block of blocks) {
+            const blueHeader = block.querySelector('.w3-blue strong');
+            if (!blueHeader) continue;
+
+            const headerText = blueHeader.textContent.trim();
+            let blockFaculty = null;
+
+            if (headerText.includes('MÜHENDİSLİK FAKÜLTESİ')) {
+                blockFaculty = 'MUHENDISLIK';
+            } else if (headerText.includes('FAKÜLTELER (FEN)')) {
+                blockFaculty = 'FEN_UZEM';
+            } else continue;
+
+            studentFaculties.add(blockFaculty);
+
+            const courseLinks = block.querySelectorAll('a.w3-button');
+            courseLinks.forEach(link => {
+                const rawName = link.textContent.trim();
+                const code = link.getAttribute('title') || '';
+                const instructorMatch = rawName.match(/\(([^)]+)\)$/);
+                const instructor = instructorMatch ? instructorMatch[1].trim() : 'Bilinmiyor';
+                const cleanName = rawName.split('(')[0].trim();
+
+                // Unique key: code + faculty (same code can appear in both faculties)
+                const lookupKey = `${code}|${blockFaculty}`;
+
+                if (!courseLookup[lookupKey]) {
+                    courseLookup[lookupKey] = { name: cleanName, code, instructor, faculty: blockFaculty, key: lookupKey };
+                }
+
+                studentCourseCodes.push(lookupKey);
+
+                // Update stats maps
+                const stats = blockFaculty === 'MUHENDISLIK' ? engStats : fenStats;
+                stats.courses.set(lookupKey, (stats.courses.get(lookupKey) || 0) + 1);
+                stats.instructors.set(instructor, (stats.instructors.get(instructor) || 0) + 1);
+                if (!stats.instructorCourseKeys.has(instructor)) {
+                    stats.instructorCourseKeys.set(instructor, new Set());
+                }
+                stats.instructorCourseKeys.get(instructor).add(lookupKey);
             });
         }
 
-        function renderCourseTable(tbody, courses, faculty, metaEl, metaLabel) {
-            metaEl.textContent = `${courses.length} ${metaLabel}`;
-            if (!courses.length) {
-                const query = faculty === 'MUHENDISLIK' ? els.engSearch.value.trim() : els.fenSearch.value.trim();
-                tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${query ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
-                return;
-            }
-            tbody.innerHTML = courses.map(([course, count], i) =>
-                `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(course)}', '${faculty}')">
-                    <td class="rank-cell">${i + 1}</td>
-                    <td>${escapeHtml(course)}</td>
-                    <td class="count-cell">${count}</td>
-                </tr>`
-            ).join('');
-        }
-
-        function renderInstructorsTable(instructors, tbody, metaEl) {
-            metaEl.textContent = `${instructors.length} hoca`;
-            if (!instructors.length) {
-                tbody.innerHTML = `<tr><td colspan="2" class="empty-state">${els.instructorSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
-                return;
-            }
-            tbody.innerHTML = instructors.map(([name, count]) =>
-                `<tr class="clickable-row" onclick="showInstructorCourses('${escapeHtml(name)}')">
-                    <td>${escapeHtml(name)}</td>
-                    <td class="count-cell">${count}</td>
-                </tr>`
-            ).join('');
-        }
-
-        function renderStudentsTable(students, tbody, metaEl) {
-            metaEl.textContent = `${students.length} öğrenci`;
-            if (!students.length) {
-                tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${els.studentSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
-                return;
-            }
-            tbody.innerHTML = students.map(s =>
-                `<tr class="clickable-row" onclick="showStudentDetails('${s.ogrno}')">
-                    <td>${s.ogrno}</td>
-                    <td>${escapeHtml(s.name)}</td>
-                    <td>${formatFaculties(s.faculties)}</td>
-                </tr>`
-            ).join('');
-        }
-
-        function buildInstructors(eng, fen) {
-            const combined = new Map();
-            [...eng, ...fen].forEach(([name, count]) => {
-                combined.set(name, (combined.get(name) || 0) + count);
-            });
-            return Array.from(combined.entries()).sort((a, b) => b[1] - a[1]);
-        }
-
-        function formatFaculties(faculties) {
-            if (!faculties || !faculties.length) return '-';
-            const labels = faculties.map(f => {
-                if (f === 'MUHENDISLIK') return '<span class="tag tag-eng">MÜH</span>';
-                if (f === 'FEN_UZEM') return '<span class="tag tag-fen">FEN</span>';
-                return f;
-            });
-            return labels.join(' ');
-        }
-
-        function addStudent(student) {
+        if (studentFaculties.size > 0 && studentCourseCodes.length > 0) {
+            const faculties = Array.from(studentFaculties);
+            // Store compact: only course codes (keys), no repeated full objects
+            const student = { ogrno, name: studentName, year, group, faculties, courses: studentCourseCodes };
+            validStudents.push(student);
+            studentMap.set(ogrno, student);
             allStudents.unshift(student);
-            filterTables();
+            successCount++;
+            saveToLocalStorage();
+            return faculties.join('+');
         }
+        return null;
+    }
 
-        function setAllStudents(students) {
-            allStudents = students;
-            filterTables();
-        }
-
-        function addLog(entry) {
-            const time = new Date(entry.time).toLocaleTimeString('tr-TR');
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            div.innerHTML = `<span class="log-time">${time}</span><span class="log-message">${escapeHtml(entry.message)}</span>`;
-            els.logs.appendChild(div);
-            els.logs.scrollTop = els.logs.scrollHeight;
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function openModal(title, bodyHtml) {
-            document.getElementById('modalTitle').textContent = title;
-            document.getElementById('modalBody').innerHTML = bodyHtml;
-            document.getElementById('detailModal').classList.add('active');
-        }
-
-        function closeModal(event) {
-            if (event && event.target !== document.getElementById('detailModal')) return;
-            document.getElementById('detailModal').classList.remove('active');
-        }
-
-        function showCourseStudents(courseKey, faculty) {
-            socket.emit('queryStudentsByCourse', { courseKey, faculty }, (data) => {
-                const list = data.students.length
-                    ? `<table><thead><tr><th>Öğrenci No</th><th>İsim</th><th>Yıl</th><th>Grup</th><th>Fakülteler</th></tr></thead><tbody>` +
-                      data.students.map(s =>
-                          `<tr class="clickable-row" onclick="showStudentDetails('${s.ogrno}')">
-                              <td>${s.ogrno}</td>
-                              <td>${escapeHtml(s.name)}</td>
-                              <td>${s.year}</td>
-                              <td>${s.group}</td>
-                              <td>${formatFaculties(s.faculties)}</td>
-                          </tr>`
-                      ).join('') +
-                      `</tbody></table>`
-                    : '<p class="empty-state">Bu dersi alan öğrenci bulunamadı.</p>';
-                openModal(`📚 ${escapeHtml(courseKey)}`, `<div class="modal-subtitle">Bu dersi alan ${data.students.length} öğrenci</div>${list}`);
+    // ==================== FETCH WITH RETRY ====================
+    async function fetchStudent(ogrno, attempt = 1) {
+        requestCount++;
+        try {
+            const res = await fetch(PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ogrno }),
+                signal: AbortSignal.timeout(10000),
             });
+
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+
+            const html = await res.text();
+            const faculty = parseResponse(ogrno, html);
+            if (faculty) {
+                addLog(`✅ ${ogrno} (${faculty})`);
+            }
+            return true;
+        } catch (err) {
+            errorCount++;
+            if (attempt < MAX_RETRIES) {
+                await delay(500);
+                return fetchStudent(ogrno, attempt + 1);
+            }
+            // Only log persistent errors to avoid log spam
+            if (errorCount <= 20 || errorCount % 50 === 0) {
+                addLog(`❌ ${ogrno} HATA (deneme ${attempt}): ${err.message}`);
+            }
+            return false;
+        }
+    }
+
+    function delay(ms) {
+        return new Promise(r => setTimeout(r, ms));
+    }
+
+    // ==================== SCRAPER ENGINE ====================
+    function processNext() {
+        if (shouldStop || ogrnos.length === 0) {
+            if (pending === 0 && !finished) {
+                finished = true;
+                isRunning = false;
+                isPaused = false;
+                addLog(shouldStop ? '🛑 Tarama durduruldu.' : '🏁 Tarama tamamlandı.');
+                updateUI();
+            }
+            return;
         }
 
-        function showInstructorCourses(instructor) {
-            socket.emit('queryCoursesByInstructor', { instructor }, (data) => {
-                const list = data.courses.length
-                    ? `<table><thead><tr><th>Ders</th><th>Kod</th></tr></thead><tbody>` +
-                      data.courses.map(c =>
-                          `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(c.courseKey)}', 'all')"><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td></tr>`
-                      ).join('') +
-                      `</tbody></table>`
-                    : '<p class="empty-state">Verdiği ders bulunamadı.</p>';
-                openModal(`👨‍🏫 ${escapeHtml(instructor)}`, `<div class="modal-subtitle">Verdiği dersler (${data.courses.length})</div>${list}`);
+        if (isPaused) return;
+
+        const ogrno = ogrnos.shift();
+        pending++;
+        updateUI();
+
+        fetchStudent(ogrno).finally(() => {
+            pending--;
+            updateUI();
+            if (!shouldStop && !isPaused) {
+                setTimeout(() => processNext(), DELAY_MS);
+            } else if (pending === 0 && (shouldStop || ogrnos.length === 0)) {
+                finished = true;
+                isRunning = false;
+                isPaused = false;
+                addLog(shouldStop ? '🛑 Tarama durduruldu.' : '🏁 Tarama tamamlandı.');
+                updateUI();
+            }
+        });
+    }
+
+    function start() {
+        if (isRunning) return;
+        resetState(false); // keep localStorage students
+        ogrnos = buildOgrnos();
+
+        // Skip already-scraped ogrnos from localStorage
+        const scrapedSet = new Set(validStudents.map(s => s.ogrno));
+        const alreadyScraped = ogrnos.filter(o => scrapedSet.has(o)).length;
+        ogrnos = ogrnos.filter(o => !scrapedSet.has(o));
+
+        isRunning = true;
+        isPaused = false;
+        shouldStop = false;
+        finished = false;
+
+        if (alreadyScraped > 0) {
+            addLog(`📦 ${alreadyScraped} öğrenci localStorage'dan yüklendi, atlandı.`);
+        }
+        addLog(`🚀 ${ogrnos.length} öğrenci numarası taranıyor...`);
+        updateUI();
+
+        for (let i = 0; i < CONCURRENCY; i++) processNext();
+    }
+
+    function pause() {
+        if (!isRunning || isPaused) return;
+        isPaused = true;
+        addLog('⏸️ Tarama duraklatıldı.');
+        updateUI();
+    }
+
+    function resume() {
+        if (!isRunning || !isPaused) return;
+        isPaused = false;
+        addLog('▶️ Tarama devam ediyor.');
+        updateUI();
+        const workers = Math.max(0, CONCURRENCY - pending);
+        for (let i = 0; i < workers; i++) processNext();
+    }
+
+    function stop() {
+        if (!isRunning) return;
+        shouldStop = true;
+        addLog('🛑 STOP COMMAND RECEIVED');
+        updateUI();
+    }
+
+    function resetState(clearStudents = true) {
+        isRunning = false;
+        isPaused = false;
+        shouldStop = false;
+        pending = 0;
+        finished = false;
+        requestCount = 0;
+        successCount = 0;
+        errorCount = 0;
+        ogrnos = [];
+
+        if (clearStudents) {
+            validStudents = [];
+            allStudents = [];
+            courseLookup = {};
+            studentMap.clear();
+            localStorage.removeItem(LS_KEY);
+        }
+
+        engStats.courses.clear();
+        engStats.instructors.clear();
+        engStats.instructorCourseKeys.clear();
+        fenStats.courses.clear();
+        fenStats.instructors.clear();
+        fenStats.instructorCourseKeys.clear();
+
+        rebuildStats();
+    }
+
+    function rebuildStats() {
+        engStats.courses.clear();
+        engStats.instructors.clear();
+        engStats.instructorCourseKeys.clear();
+        fenStats.courses.clear();
+        fenStats.instructors.clear();
+        fenStats.instructorCourseKeys.clear();
+
+        validStudents.forEach(student => {
+            student.courses.forEach(key => {
+                const c = courseLookup[key];
+                if (!c) return;
+                const stats = c.faculty === 'MUHENDISLIK' ? engStats : fenStats;
+                stats.courses.set(key, (stats.courses.get(key) || 0) + 1);
+                stats.instructors.set(c.instructor, (stats.instructors.get(c.instructor) || 0) + 1);
+                if (!stats.instructorCourseKeys.has(c.instructor)) {
+                    stats.instructorCourseKeys.set(c.instructor, new Set());
+                }
+                stats.instructorCourseKeys.get(c.instructor).add(key);
             });
-        }
+        });
+    }
 
-        function showStudentDetails(ogrno) {
-            socket.emit('queryStudentDetails', { ogrno }, (data) => {
-                if (!data.student) {
-                    openModal('Öğrenci Detayı', '<p class="empty-state">Öğrenci bulunamadı.</p>');
-                    return;
-                }
-                const s = data.student;
-                const facultyLabels = (s.faculties || []).map(f => f === 'MUHENDISLIK' ? 'MÜHENDİSLİK' : (f === 'FEN_UZEM' ? 'FEN/UZEM' : f)).join(' + ');
-                let html = `<div class="modal-subtitle">${s.ogrno} - ${escapeHtml(s.name)} | ${facultyLabels || 'Bilinmiyor'}</div>`;
+    // ==================== LOCALSTORAGE ====================
+    const LS_SAVE_THROTTLE_MS = 2000;
+    let lsSaveTimer = null;
 
-                const engCourses = s.coursesByFaculty.MUHENDISLIK;
-                const fenCourses = s.coursesByFaculty.FEN_UZEM;
-
-                if (engCourses.length) {
-                    html += `<div class="faculty-group"><div class="faculty-group-title">🏫 Mühendislik Fakültesi</div>`;
-                    html += renderCourseList(engCourses) + `</div>`;
-                }
-
-                if (fenCourses.length) {
-                    html += `<div class="faculty-group"><div class="faculty-group-title">🔬 Fen/UZEM</div>`;
-                    html += renderCourseList(fenCourses) + `</div>`;
-                }
-
-                if (!engCourses.length && !fenCourses.length) {
-                    html += '<p class="empty-state">Kayıtlı ders bulunamadı.</p>';
-                }
-
-                openModal(`👨‍🎓 ${escapeHtml(s.name)}`, html);
-            });
-        }
-
-        function renderCourseList(courses) {
-            return `<table><thead><tr><th>Ders</th><th>Kod</th><th>Hoca</th></tr></thead><tbody>` +
-                courses.map(c =>
-                    `<tr class="clickable-row" onclick="showCourseStudents('${escapeHtml(c.courseKey)}', 'all')"><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td><td>${escapeHtml(c.instructor)}</td></tr>`
-                ).join('') +
-                `</tbody></table>`;
-        }
-
-        function start() { socket.emit('start'); }
-        function pause() { socket.emit('pause'); }
-        function resume() { socket.emit('resume'); }
-        function stop() { socket.emit('stop'); }
-        function exportSql() { window.location.href = '/api/export/db'; }
-
-        function triggerImport() {
-            document.getElementById('importFileInput').value = '';
-            document.getElementById('importFileInput').click();
-        }
-
-        async function importDb(input) {
-            const file = input.files[0];
-            if (!file) return;
-
-            const statusEl = document.getElementById('importStatus');
-            const btnImport = document.getElementById('btnImport');
-
-            statusEl.textContent = 'Yükleniyor...';
-            statusEl.className = 'import-status';
-            btnImport.disabled = true;
-
+    function saveToLocalStorage() {
+        if (lsSaveTimer) return;
+        lsSaveTimer = setTimeout(() => {
+            lsSaveTimer = null;
             try {
-                const formData = new FormData();
-                formData.append('dbfile', file);
+                // Normalized format: { courses: {...lookup}, students: [...] }
+                const payload = { courses: courseLookup, students: validStudents };
+                localStorage.setItem(LS_KEY, JSON.stringify(payload));
+            } catch (e) {
+                addLog(`⚠️ localStorage dolu, veri kaydedilemedi: ${e.message}`);
+            }
+        }, LS_SAVE_THROTTLE_MS);
+    }
 
-                const res = await fetch('/api/import/db', { method: 'POST', body: formData });
-                const data = await res.json();
+    function loadFromLocalStorage() {
+        try {
+            const raw = localStorage.getItem(LS_KEY);
+            if (!raw) return;
+            const payload = JSON.parse(raw);
+            if (!payload || typeof payload !== 'object') return;
 
-                if (!res.ok) throw new Error(data.error || 'Bilinmeyen hata');
+            // Support both new normalized format and old array format
+            if (Array.isArray(payload)) {
+                // Old v1 format — migrate on the fly
+                _loadLegacyFormat(payload);
+            } else {
+                courseLookup = payload.courses || {};
+                validStudents = payload.students || [];
+            }
 
-                statusEl.textContent = `✓ ${data.studentCount} öğrenci yüklendi`;
-                statusEl.className = 'import-status success';
-            } catch (err) {
-                statusEl.textContent = `Hata: ${err.message}`;
-                statusEl.className = 'import-status error';
-            } finally {
-                btnImport.disabled = false;
-                setTimeout(() => {
-                    statusEl.textContent = '';
-                    statusEl.className = 'import-status';
-                }, 5000);
+            if (!validStudents.length) return;
+            allStudents = [...validStudents].reverse();
+            successCount = validStudents.length;
+            validStudents.forEach(s => studentMap.set(s.ogrno, s));
+            rebuildStats();
+            addLog(`📦 localStorage'dan ${validStudents.length} öğrenci yüklendi.`);
+            updateUI();
+        } catch (e) {
+            addLog(`⚠️ localStorage okuma hatası: ${e.message}`);
+        }
+    }
+
+    function _loadLegacyFormat(arr) {
+        // v1: each student had full course objects — convert to normalized
+        courseLookup = {};
+        validStudents = arr.map(s => {
+            const keys = (s.courses || []).map(c => {
+                const key = `${c.code}|${c.faculty}`;
+                if (!courseLookup[key]) {
+                    courseLookup[key] = { name: c.name, code: c.code, instructor: c.instructor, faculty: c.faculty, key };
+                }
+                return key;
+            });
+            return { ogrno: s.ogrno, name: s.name, year: s.year, group: s.group, faculties: s.faculties, courses: keys };
+        });
+    }
+
+    function clearData() {
+        if (!confirm('Tüm tarama verisi silinecek. Emin misiniz?')) return;
+        resetState(true);
+        updateUI();
+        addLog('🗑️ Veri temizlendi.');
+    }
+
+    // ==================== JSON EXPORT / IMPORT ====================
+    function exportJson() {
+        if (!validStudents.length) {
+            alert('Dışa aktarılacak veri yok.');
+            return;
+        }
+        // Normalized format: { courses: {...}, students: [...] }
+        const payload = { courses: courseLookup, students: validStudents };
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `uzem_export_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function triggerImport() {
+        document.getElementById('importFileInput').value = '';
+        document.getElementById('importFileInput').click();
+    }
+
+    async function importJson(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const statusEl = document.getElementById('importStatus');
+        const btnImport = document.getElementById('btnImport');
+
+        statusEl.textContent = 'Yükleniyor...';
+        statusEl.className = 'import-status';
+        btnImport.disabled = true;
+
+        try {
+            const text = await file.text();
+            const payload = JSON.parse(text);
+
+            if (Array.isArray(payload)) {
+                // Legacy v1 format
+                _loadLegacyFormat(payload);
+            } else if (payload && payload.students) {
+                courseLookup = payload.courses || {};
+                validStudents = payload.students;
+            } else {
+                throw new Error('Geçersiz format.');
+            }
+
+            allStudents = [...validStudents].reverse();
+            successCount = validStudents.length;
+            studentMap.clear();
+            validStudents.forEach(s => studentMap.set(s.ogrno, s));
+            rebuildStats();
+            saveToLocalStorage();
+            updateUI();
+
+            statusEl.textContent = `✓ ${validStudents.length} öğrenci yüklendi`;
+            statusEl.className = 'import-status success';
+            addLog(`📂 JSON içe aktarıldı: ${validStudents.length} öğrenci yüklendi.`);
+        } catch (err) {
+            statusEl.textContent = `Hata: ${err.message}`;
+            statusEl.className = 'import-status error';
+        } finally {
+            btnImport.disabled = false;
+            setTimeout(() => {
+                statusEl.textContent = '';
+                statusEl.className = 'import-status';
+            }, 5000);
+        }
+    }
+
+    // ==================== UI UPDATE ====================
+    function updateUI() {
+        // Counters
+        els.requestCount.textContent = requestCount.toLocaleString('tr-TR');
+        els.validCount.textContent = validStudents.length.toLocaleString('tr-TR');
+        els.errorCount.textContent = errorCount.toLocaleString('tr-TR');
+        els.pendingCount.textContent = pending.toLocaleString('tr-TR');
+        els.remainingCount.textContent = ogrnos.length.toLocaleString('tr-TR');
+
+        // Progress
+        const total = requestCount + ogrnos.length + pending;
+        const pct = total > 0 ? Math.round((requestCount / total) * 100) : 0;
+        els.progressBar.style.width = `${pct}%`;
+        els.progressText.textContent = `${pct}%`;
+
+        // Status badge
+        if (isRunning && !isPaused) setStatus('Çalışıyor', 'running');
+        else if (isRunning && isPaused) setStatus('Duraklatıldı', 'paused');
+        else setStatus('Bekliyor', 'stopped');
+
+        // Buttons
+        els.btnStart.disabled = isRunning;
+        els.btnPause.disabled = !isRunning || isPaused;
+        els.btnResume.disabled = !isRunning || !isPaused;
+        els.btnStop.disabled = !isRunning;
+
+        // Tables
+        renderTables();
+    }
+
+    function setStatus(text, type) {
+        els.statusBadge.textContent = text;
+        els.statusBadge.className = `status-badge ${type}`;
+    }
+
+    // ==================== SERIALIZE STATS ====================
+    function serializeStats(stats) {
+        // courses: Map(lookupKey -> count) — resolve display name from courseLookup
+        const courses = Array.from(stats.courses.entries())
+            .map(([key, count]) => {
+                const c = courseLookup[key];
+                const displayName = c ? `${c.name} (${c.code})` : key;
+                return [displayName, count, key];  // [displayName, count, lookupKey]
+            })
+            .sort((a, b) => b[1] - a[1]);
+        const instructors = Array.from(stats.instructorCourseKeys.entries())
+            .map(([name, set]) => [name, set.size])
+            .sort((a, b) => b[1] - a[1]);
+        return { courses, instructors };
+    }
+
+    // ==================== TABLE RENDERING ====================
+    function renderTables() {
+        const s = serializeStats(engStats);
+        const f = serializeStats(fenStats);
+        currentEngCourses = s.courses;
+        currentFenCourses = f.courses;
+        currentInstructors = buildInstructors(s.instructors, f.instructors);
+        filterTables();
+    }
+
+    function filterTables() {
+        const engQ  = els.engSearch.value.trim().toLowerCase();
+        const fenQ  = els.fenSearch.value.trim().toLowerCase();
+        const instQ = els.instructorSearch.value.trim().toLowerCase();
+        const stuQ  = els.studentSearch.value.trim().toLowerCase();
+
+        let fEng  = currentEngCourses.filter(([c]) => c.toLowerCase().includes(engQ));
+        let fFen  = currentFenCourses.filter(([c]) => c.toLowerCase().includes(fenQ));
+        let fInst = currentInstructors.filter(([n]) => n.toLowerCase().includes(instQ));
+        let fStu  = allStudents.filter(s =>
+            s.ogrno.includes(stuQ) || (s.name && s.name.toLowerCase().includes(stuQ))
+        );
+
+        fEng  = sortData(fEng, sortState.eng);
+        fFen  = sortData(fFen, sortState.fen);
+        fInst = sortData(fInst, sortState.instructors);
+        fStu  = sortStudentData(fStu, sortState.students);
+
+        renderCourseTable(els.engCoursesTable, fEng, 'MUHENDISLIK', els.engMeta, 'ders');
+        renderCourseTable(els.fenCoursesTable, fFen, 'FEN_UZEM', els.fenMeta, 'ders');
+        renderInstructorsTable(fInst, els.instructorsTable, els.instructorMeta);
+        renderStudentsTable(fStu, els.studentsTable, els.studentMeta);
+    }
+
+    function sortData(items, { column, direction }) {
+        const sorted = [...items];
+        const asc = direction === 'asc';
+        if (column === 'count') sorted.sort((a, b) => asc ? a[1] - b[1] : b[1] - a[1]);
+        else if (column === 'name') sorted.sort((a, b) => asc ? a[0].localeCompare(b[0], 'tr') : b[0].localeCompare(a[0], 'tr'));
+        return sorted;
+    }
+
+    function sortStudentData(students, { column, direction }) {
+        const sorted = [...students];
+        const asc = direction === 'asc';
+        if (column === 'ogrno') sorted.sort((a, b) => asc ? a.ogrno.localeCompare(b.ogrno) : b.ogrno.localeCompare(a.ogrno));
+        else if (column === 'name') sorted.sort((a, b) => asc ? (a.name||'').localeCompare(b.name||'', 'tr') : (b.name||'').localeCompare(a.name||'', 'tr'));
+        else if (column === 'faculties') sorted.sort((a, b) => {
+            const d = (a.faculties||[]).length - (b.faculties||[]).length;
+            return asc ? d : -d;
+        });
+        return sorted;
+    }
+
+    function sortTable(table, column) {
+        const cur = sortState[table];
+        if (cur.column === column) {
+            cur.direction = cur.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            cur.column = column;
+            cur.direction = (column === 'name' || column === 'ogrno') ? 'asc' : 'desc';
+        }
+        updateSortIndicators();
+        filterTables();
+    }
+
+    function updateSortIndicators() {
+        document.querySelectorAll('th.sortable').forEach(th => {
+            const tbl = th.dataset.table;
+            const col = th.dataset.col;
+            const ind = th.querySelector('.sort-indicator');
+            const active = sortState[tbl]?.column === col;
+            th.classList.toggle('active', active);
+            if (active && ind) ind.textContent = sortState[tbl].direction === 'asc' ? '↑' : '↓';
+        });
+    }
+
+    function renderCourseTable(tbody, courses, faculty, metaEl, label) {
+        metaEl.textContent = `${courses.length} ${label}`;
+        if (!courses.length) {
+            const q = faculty === 'MUHENDISLIK' ? els.engSearch.value.trim() : els.fenSearch.value.trim();
+            tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${q ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+            return;
+        }
+        // Use data-* attributes — avoids all quote-escaping issues in onclick
+        tbody.innerHTML = courses.map(([displayName, count, lookupKey], i) =>
+            `<tr class="clickable-row" data-key="${escapeAttr(lookupKey)}" data-faculty="${faculty}">
+                <td class="rank-cell">${i + 1}</td>
+                <td>${escapeHtml(displayName)}</td>
+                <td class="count-cell">${count}</td>
+            </tr>`
+        ).join('');
+        tbody.querySelectorAll('tr[data-key]').forEach(tr => {
+            tr.addEventListener('click', () => showCourseStudents(tr.dataset.key, tr.dataset.faculty));
+        });
+    }
+
+    function renderInstructorsTable(instructors, tbody, metaEl) {
+        metaEl.textContent = `${instructors.length} hoca`;
+        if (!instructors.length) {
+            tbody.innerHTML = `<tr><td colspan="2" class="empty-state">${els.instructorSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = instructors.map(([name, count]) =>
+            `<tr class="clickable-row" data-instructor="${escapeAttr(name)}">
+                <td>${escapeHtml(name)}</td>
+                <td class="count-cell">${count}</td>
+            </tr>`
+        ).join('');
+        tbody.querySelectorAll('tr[data-instructor]').forEach(tr => {
+            tr.addEventListener('click', () => showInstructorCourses(tr.dataset.instructor));
+        });
+    }
+
+    function renderStudentsTable(students, tbody, metaEl) {
+        metaEl.textContent = `${students.length} öğrenci`;
+        if (!students.length) {
+            tbody.innerHTML = `<tr><td colspan="3" class="empty-state">${els.studentSearch.value.trim() ? 'Arama sonucu bulunamadı' : 'Henüz veri yok'}</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = students.map(s =>
+            `<tr class="clickable-row" data-ogrno="${s.ogrno}">
+                <td>${s.ogrno}</td>
+                <td>${escapeHtml(s.name)}</td>
+                <td>${formatFaculties(s.faculties)}</td>
+            </tr>`
+        ).join('');
+        tbody.querySelectorAll('tr[data-ogrno]').forEach(tr => {
+            tr.addEventListener('click', () => showStudentDetails(tr.dataset.ogrno));
+        });
+    }
+
+    function buildInstructors(eng, fen) {
+        const combined = new Map();
+        [...eng, ...fen].forEach(([name, count]) => {
+            combined.set(name, (combined.get(name) || 0) + count);
+        });
+        return Array.from(combined.entries()).sort((a, b) => b[1] - a[1]);
+    }
+
+    function formatFaculties(faculties) {
+        if (!faculties || !faculties.length) return '-';
+        return faculties.map(f => {
+            if (f === 'MUHENDISLIK') return '<span class="tag tag-eng">MÜH</span>';
+            if (f === 'FEN_UZEM')    return '<span class="tag tag-fen">FEN</span>';
+            return f;
+        }).join(' ');
+    }
+
+    // ==================== MODAL ====================
+    function openModal(title, bodyHtml) {
+        document.getElementById('modalTitle').textContent = title;
+        document.getElementById('modalBody').innerHTML = bodyHtml;
+        document.getElementById('detailModal').classList.add('active');
+    }
+
+    // Like openModal but accepts a DOM node (avoids losing event listeners)
+    function openModalNode(title, subtitleHtml, node) {
+        document.getElementById('modalTitle').textContent = title;
+        const body = document.getElementById('modalBody');
+        body.innerHTML = subtitleHtml;
+        if (node) {
+            if (typeof node === 'string') {
+                body.insertAdjacentHTML('beforeend', node);
+            } else {
+                body.appendChild(node);
             }
         }
+        document.getElementById('detailModal').classList.add('active');
+    }
 
-        socket.on('connect', () => addLog({ time: new Date().toISOString(), message: '✅ Dashboard bağlantısı kuruldu.' }));
-        socket.on('stats', updateStats);
-        socket.on('studentFound', addStudent);
-        socket.on('studentsSnapshot', setAllStudents);
-        socket.on('log', addLog);
-        socket.on('requestSent', (data) => {});
-        socket.on('responseReceived', (data) => {});
-        socket.on('completed', () => {
-            setStatus('Tamamlandı', 'stopped');
-            updateButtons();
+    function closeModal(event) {
+        if (event && event.target !== document.getElementById('detailModal')) return;
+        document.getElementById('detailModal').classList.remove('active');
+    }
+
+    function showCourseStudents(lookupKey, faculty) {
+        // lookupKey = "CODE|FACULTY" — resolve display name
+        const courseInfo = courseLookup[lookupKey];
+        const displayName = courseInfo ? `${courseInfo.name} (${courseInfo.code})` : lookupKey;
+
+        const students = validStudents.filter(s =>
+            s.courses.some(k => k === lookupKey && (faculty === 'all' || k.endsWith(`|${faculty}`)))
+        ).map(s => ({ ogrno: s.ogrno, name: s.name, year: s.year, group: s.group, faculties: s.faculties }));
+
+        let listEl = null;
+        if (students.length) {
+            listEl = document.createElement('div');
+            listEl.innerHTML = `<table><thead><tr><th>Öğrenci No</th><th>İsim</th><th>Yıl</th><th>Grup</th><th>Fakülteler</th></tr></thead><tbody>` +
+                students.map(s =>
+                    `<tr class="clickable-row" data-ogrno="${s.ogrno}">
+                        <td>${s.ogrno}</td><td>${escapeHtml(s.name)}</td>
+                        <td>${s.year}</td><td>${s.group}</td>
+                        <td>${formatFaculties(s.faculties)}</td>
+                    </tr>`
+                ).join('') + `</tbody></table>`;
+            listEl.querySelectorAll('tr[data-ogrno]').forEach(tr => {
+                tr.addEventListener('click', () => showStudentDetails(tr.dataset.ogrno));
+            });
+        }
+
+        const subtitle = `<div class="modal-subtitle">Bu dersi alan ${students.length} öğrenci</div>`;
+        openModalNode(`📚 ${escapeHtml(displayName)}`, subtitle, listEl || '<p class="empty-state">Bu dersi alan öğrenci bulunamadı.</p>');
+    }
+
+    function showInstructorCourses(instructor) {
+        // Collect unique courses this instructor teaches from courseLookup
+        const courseKeys = new Set();
+        validStudents.forEach(s => {
+            s.courses.forEach(key => {
+                const c = courseLookup[key];
+                if (c && c.instructor === instructor) courseKeys.add(key);
+            });
         });
+        const courses = Array.from(courseKeys).map(k => courseLookup[k]).filter(Boolean);
 
-        updateSortIndicators();
+        let listEl = null;
+        if (courses.length) {
+            listEl = document.createElement('div');
+            listEl.innerHTML = `<table><thead><tr><th>Ders</th><th>Kod</th></tr></thead><tbody>` +
+                courses.map(c =>
+                    `<tr class="clickable-row" data-key="${escapeAttr(c.key)}">
+                        <td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td>
+                    </tr>`
+                ).join('') + `</tbody></table>`;
+            listEl.querySelectorAll('tr[data-key]').forEach(tr => {
+                tr.addEventListener('click', () => showCourseStudents(tr.dataset.key, 'all'));
+            });
+        }
+
+        const subtitle = `<div class="modal-subtitle">Verdiği dersler (${courses.length})</div>`;
+        openModalNode(`👨‍🏫 ${escapeHtml(instructor)}`, subtitle, listEl || '<p class="empty-state">Verdiği ders bulunamadı.</p>');
+    }
+
+    function showStudentDetails(ogrno) {
+        const student = studentMap.get(ogrno) || validStudents.find(s => s.ogrno === ogrno);
+        if (!student) {
+            openModal('Öğrenci Detayı', '<p class="empty-state">Öğrenci bulunamadı.</p>');
+            return;
+        }
+        const s = student;
+        const facultyLabels = (s.faculties || []).map(f =>
+            f === 'MUHENDISLIK' ? 'MÜHENDİSLİK' : (f === 'FEN_UZEM' ? 'FEN/UZEM' : f)
+        ).join(' + ');
+
+        const resolvedCourses = s.courses.map(k => courseLookup[k]).filter(Boolean);
+        const engCourses = resolvedCourses.filter(c => c.faculty === 'MUHENDISLIK');
+        const fenCourses = resolvedCourses.filter(c => c.faculty === 'FEN_UZEM');
+
+        // Build body as a DOM node so nested event listeners survive
+        const body = document.createElement('div');
+        body.innerHTML = `<div class="modal-subtitle">${s.ogrno} - ${escapeHtml(s.name)} | ${facultyLabels || 'Bilinmiyor'}</div>`;
+
+        if (engCourses.length) {
+            const group = document.createElement('div');
+            group.className = 'faculty-group';
+            group.innerHTML = '<div class="faculty-group-title">🏫 Mühendislik Fakültesi</div>';
+            group.appendChild(renderCourseList(engCourses));
+            body.appendChild(group);
+        }
+        if (fenCourses.length) {
+            const group = document.createElement('div');
+            group.className = 'faculty-group';
+            group.innerHTML = '<div class="faculty-group-title">🔬 Fen/UZEM</div>';
+            group.appendChild(renderCourseList(fenCourses));
+            body.appendChild(group);
+        }
+        if (!engCourses.length && !fenCourses.length) {
+            body.insertAdjacentHTML('beforeend', '<p class="empty-state">Kayıtlı ders bulunamadı.</p>');
+        }
+
+        openModalNode(`👨‍🎓 ${escapeHtml(s.name)}`, '', body);
+    }
+
+    // Returns a DOM node (not a string) so event listeners survive insertion
+    function renderCourseList(courses) {
+        const container = document.createElement('div');
+        container.innerHTML = `<table><thead><tr><th>Ders</th><th>Kod</th><th>Hoca</th></tr></thead><tbody>` +
+            courses.map(c =>
+                `<tr class="clickable-row" data-key="${escapeAttr(c.key)}">
+                    <td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.code)}</td><td>${escapeHtml(c.instructor)}</td>
+                </tr>`
+            ).join('') + `</tbody></table>`;
+        container.querySelectorAll('tr[data-key]').forEach(tr => {
+            tr.addEventListener('click', () => showCourseStudents(tr.dataset.key, 'all'));
+        });
+        return container; // DOM node — listeners intact
+    }
+
+    // ==================== HELPERS ====================
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text || '';
+        return div.innerHTML;
+    }
+
+    function escapeAttr(text) {
+        return (text || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ==================== INIT ====================
+    updateSortIndicators();
+    loadFromLocalStorage();
+    updateUI();
+    addLog('✅ Dashboard hazır. Başlatmak için butona tıklayın.');
     </script>
 </body>
 </html>

@@ -1,18 +1,22 @@
-// Local development server only.
-// On Vercel: static files are served by @vercel/static, /api/proxy by @vercel/node.
-// This file is NOT used on Vercel.
-
-const express = require('express');
-const path = require('path');
-const app = express();
+// Vercel Serverless Function - CORS proxy for edestek.kocaeli.edu.tr
+// Each call is a single student lookup - completes in <3s, well within Vercel limits.
 
 const TARGET_URL = 'http://edestek.kocaeli.edu.tr/index.php';
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+module.exports = async function handler(req, res) {
+    // Allow CORS from any origin (our own frontend calls this)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-// CORS proxy - mirrors api/proxy.js for local dev
-app.post('/api/proxy', async (req, res) => {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method Not Allowed' });
+    }
+
     const { ogrno } = req.body || {};
     if (!ogrno || typeof ogrno !== 'string' || !/^\d{8,10}$/.test(ogrno)) {
         return res.status(400).json({ error: 'Geçersiz ogrno' });
@@ -27,6 +31,7 @@ app.post('/api/proxy', async (req, res) => {
                 'cache-control': 'no-cache',
             },
             body: `ogrno=${encodeURIComponent(ogrno)}`,
+            // 8 second timeout to stay safely within Vercel's 10s hobby limit
             signal: AbortSignal.timeout(8000),
         });
 
@@ -35,6 +40,7 @@ app.post('/api/proxy', async (req, res) => {
         }
 
         const html = await upstream.text();
+        // Return raw HTML - client does all parsing with native DOMParser
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         return res.status(200).send(html);
     } catch (err) {
@@ -43,13 +49,4 @@ app.post('/api/proxy', async (req, res) => {
         }
         return res.status(502).json({ error: err.message });
     }
-});
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 3003;
-app.listen(PORT, () => {
-    console.log(`🌐 Dev server running at http://localhost:${PORT}`);
-});
+};
